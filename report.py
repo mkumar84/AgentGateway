@@ -363,10 +363,7 @@ for agent in sorted(agents):
     a_uc = asub["use_case"].iloc[0] if not asub.empty else ""
     a_label = USE_CASE_LABELS.get(a_uc, a_uc)
 
-    status_color = "#e53e3e" if a_deny_rate > 0.3 else ("#dd6b20" if a_deny_rate > 0.1 else "#38a169")
-    status_dot = f'<span style="color:{status_color};font-size:1.1rem">●</span>'
-
-    with st.expander(f"{status_dot} **{agent}** · {a_label} · {a_calls} calls", expanded=False):
+    with st.expander(f"{'🔴' if a_deny_rate > 0.3 else ('🟡' if a_deny_rate > 0.1 else '🟢')} **{agent}** · {a_label} · {a_calls} calls", expanded=False):
         mc1, mc2, mc3, mc4, mc5 = st.columns(5)
         mc1.metric("Total calls", a_calls)
         mc2.metric("Deny rate", f"{a_deny_rate:.0%}", delta_color="inverse",
@@ -393,7 +390,7 @@ for agent in sorted(agents):
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 showlegend=False, margin=dict(l=0, r=0, t=4, b=0),
             )
-            st.plotly_chart(fig_agent, use_container_width=True)
+            st.plotly_chart(fig_agent, use_container_width=True, key=f"timeline_{agent}")
 
         # Tool breakdown
         tool_counts = asub.groupby(["tool", "decision"]).size().reset_index(name="count")
@@ -407,7 +404,7 @@ for agent in sorted(agents):
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 showlegend=False, margin=dict(l=0, r=0, t=4, b=0),
             )
-            st.plotly_chart(fig_tools, use_container_width=True)
+            st.plotly_chart(fig_tools, use_container_width=True, key=f"tools_{agent}")
 
 # ── Section 5 — Decision explorer ─────────────────────────────────────────────
 st.divider()
