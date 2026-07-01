@@ -1,67 +1,66 @@
-# Agentic AI Governance Gateway — weekend project
+# Agentic AI Governance Gateway
 
 A portfolio piece using [agentgateway](https://agentgateway.dev/) (open-source
-LLM/MCP/A2A data plane, Linux Foundation / AAIF project) as the control plane
-for three RBC Insurance agent use cases, with results reported through a
-Streamlit module designed to slot into the AI & ML Governance Command Centre.
+LLM/MCP/A2A data plane, Linux Foundation / AAIF) as the control plane for four
+banking AI agent use cases, with results surfaced through a Streamlit governance
+scorecard.
+
+## Use cases
+
+| Agent | Risk being controlled | Governance pattern |
+|---|---|---|
+| **Next Best Action** | Autonomous agent accessing full customer financial history | Tool-level RBAC (CEL policy) |
+| **Mortgage Fraud Detection** | Model drift and cost runaway on a regulated credit decision | Token budget cap + pinned-model routing |
+| **Wealth Advisor Assist** | PII leakage (account numbers, SINs) into advisor chat | Response-side PII redaction guardrail |
+| **AML Transaction Monitor** | Agent autonomously freezing accounts without human authorisation | Tool scope enforcement (denyByDefault) |
 
 ## Why agentgateway
 
-It's the connectivity layer underneath an "Agentic AI Platform Engineering"
-function — exactly the kind of infrastructure that role exists to operate.
-Three governance capabilities map directly to inherent-vs-residual risk
-controls:
+It is the connectivity layer underneath an "Agentic AI Platform Engineering"
+function — the infrastructure that governs what agents can do, what models they
+can call, and what data they can see, before requests reach any tool or provider.
 
 | Capability | Mechanism | Used for |
 |---|---|---|
-| Decisioning | CEL-based `AgentgatewayPolicy` (RBAC) | Claims Triage — gate the `access_pii` tool |
-| Decisioning | Token budget + model pinning | Underwriting — cap spend, force explainable model version |
-| Monitoring/Governance | Response-side regex guardrails | Advisor Assist — redact SIN/policy/banking numbers in real time |
-| Monitoring | OTEL access log (JSON) | All three — feeds the report below |
+| Decisioning | CEL-based `AgentgatewayPolicy` (RBAC) | NBA — gate `access_financial_history` |
+| Decisioning | Token budget + model pinning | Mortgage Fraud — cap spend, pin model version |
+| Monitoring/Governance | Response-side regex guardrails | Wealth Advisor — redact PII in real time |
+| Monitoring/Governance | Tool scope enforcement | AML Monitor — block `freeze_account` |
+| Monitoring | OTEL access log (JSON) | All four — feeds the report |
 
 ## Structure
 
 ```
-config/config.yaml          # agentgateway routes for all 3 use cases
-policies/01-claims-rbac.yaml          # RBAC: claims-bot vs claims-adjuster
-policies/02-underwriting-budget.yaml  # token budget + model pinning
-policies/03-advisor-redaction.yaml    # PII guardrail + tool scope
-sample_logs/audit-sample.jsonl        # synthetic log, shaped like a real export
-report.py                              # Streamlit governance scorecard
+config.yaml                       # agentgateway routes for all 4 use cases
+01-claims-rbac.yaml               # RBAC: nba-agent vs relationship-manager
+02-underwriting-budget.yaml       # token budget + model pinning
+03-advisor-redaction.yaml         # PII guardrail + tool scope
+sample_logs/audit-sample.jsonl    # synthetic log, shaped like a real export
+report.py                         # Streamlit governance scorecard
 ```
 
-## Run it for real this weekend
+## Run locally (no gateway needed)
 
-1. Install agentgateway locally (binary, ~2 min):
-   ```
-   curl -sL https://agentgateway.dev/install | bash
-   ```
-2. Stand up two trivial mock MCP servers (`claims-mcp`, `advisor-kb-mcp`) —
-   even a 20-line stdio script returning canned JSON is enough to exercise
-   the policies. Point `config/config.yaml` at them.
-3. Apply the policies in `policies/` and run:
-   ```
-   agentgateway -f config/config.yaml
-   ```
-4. Fire a handful of requests per use case (including a couple that should
-   be denied/redacted on purpose) using the MCP inspector CLI or curl.
-5. Your real decisions land in `./logs/agentgateway-audit.jsonl` in the same
-   shape as `sample_logs/audit-sample.jsonl`.
-
-## See the report now (no real gateway needed yet)
-
-```
-pip install streamlit pandas
+```bash
+pip install streamlit pandas plotly
 streamlit run report.py
 ```
 
-This runs immediately against the synthetic sample data. Once you've run
-agentgateway for real, either point `DEFAULT_LOG_PATH` at your real log file
-or use the sidebar upload — no code changes needed, since the schema matches.
+Opens immediately against the synthetic sample data.
 
-## Next step toward the Command Centre
+## Run with a real gateway
 
-Once you're happy with the standalone report, the same `load_logs()` /
-scorecard logic can become a page inside `ai-ml-gov.lovable.app` — pass
-real gateway exports in as the data source for a "Control Plane" tab
-alongside your existing risk register.
+1. Install agentgateway (~2 min):
+   ```bash
+   curl -sL https://agentgateway.dev/install | bash
+   ```
+2. Stand up mock MCP servers for each use case (a 20-line stdio script
+   returning canned JSON is sufficient to exercise the policies).
+3. Run the gateway:
+   ```bash
+   agentgateway -f config.yaml
+   ```
+4. Fire requests per use case (including deliberate deny/redact cases) via
+   the MCP Inspector CLI or curl.
+5. Real decisions land in `./logs/agentgateway-audit.jsonl` — drop that file
+   into the sidebar upload widget or point `DEFAULT_LOG_PATH` at it.

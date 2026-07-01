@@ -1,8 +1,8 @@
 """
 Agentic AI Governance Gateway — Command Centre
 -----------------------------------------------
-Governance scorecard, agent monitor, and decision explorer for three
-RBC Insurance agent use cases, powered by agentgateway (open-source
+Governance scorecard, agent monitor, and decision explorer for four
+banking AI agent use cases, powered by agentgateway (open-source
 LLM/MCP/A2A data plane — Linux Foundation / AAIF).
 
 Run:  streamlit run report.py
@@ -14,10 +14,9 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
-# ── Page config ──────────────────────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Agentic AI Governance Gateway",
     page_icon="🛡️",
@@ -29,94 +28,181 @@ st.set_page_config(
 DEFAULT_LOG_PATH = Path(__file__).parent / "sample_logs" / "audit-sample.jsonl"
 
 USE_CASE_LABELS = {
-    "claims_triage": "Claims Triage Agent",
-    "underwriting_risk": "Underwriting Risk-Scoring Agent",
-    "advisor_assist": "Advisor Assist Agent",
+    "next_best_action":  "Next Best Action Agent",
+    "mortgage_fraud":    "Mortgage Fraud Detection Agent",
+    "wealth_advisor":    "Wealth Advisor Assist Agent",
+    "aml_monitoring":    "AML Transaction Monitor",
+}
+
+USE_CASE_ICONS = {
+    "next_best_action": "🎯",
+    "mortgage_fraud":   "🏠",
+    "wealth_advisor":   "💼",
+    "aml_monitoring":   "🔍",
 }
 
 INHERENT_RISK = {
-    "claims_triage": "High",
-    "underwriting_risk": "Medium",
-    "advisor_assist": "High",
+    "next_best_action": "High",
+    "mortgage_fraud":   "High",
+    "wealth_advisor":   "High",
+    "aml_monitoring":   "Critical",
 }
 
 INHERENT_RISK_DETAIL = {
-    "claims_triage": "PII exposure via an autonomous agent processing claimant records",
-    "underwriting_risk": "Cost runaway and model drift on a regulated underwriting decision",
-    "advisor_assist": "PII leakage into an advisor-facing chat surface from knowledge base",
+    "next_best_action": (
+        "Autonomous agent accessing full customer profiles and financial history "
+        "to generate personalised product recommendations — direct PII exposure risk."
+    ),
+    "mortgage_fraud":   (
+        "LLM scoring regulated mortgage applications for fraud signals. "
+        "Model drift or uncapped spend could skew credit decisions and breach fair-lending obligations."
+    ),
+    "wealth_advisor":   (
+        "Advisor-facing agent querying a knowledge base that may surface account numbers, "
+        "SINs, or banking identifiers in unstructured responses."
+    ),
+    "aml_monitoring":   (
+        "Agent monitoring transaction streams for AML signals. Autonomous account-freezing "
+        "capability would constitute an irreversible financial action without human authorisation."
+    ),
 }
 
 GOVERNANCE_PATTERN = {
-    "claims_triage": "Tool-level RBAC (CEL policy)",
-    "underwriting_risk": "Token budget cap + pinned-model routing",
-    "advisor_assist": "Response-side PII redaction guardrail",
+    "next_best_action": "Tool-level RBAC — CEL policy gates financial history access",
+    "mortgage_fraud":   "Token budget cap + pinned-model routing (regulated decision)",
+    "wealth_advisor":   "Response-side PII redaction guardrail",
+    "aml_monitoring":   "Tool scope enforcement — freeze action blocked, human escalation required",
 }
 
 POLICY_SNIPPET = {
-    "claims_triage": """\
-# 01-claims-rbac.yaml — AgentgatewayPolicy
+    "next_best_action": """\
+# 01-nba-rbac.yaml — AgentgatewayPolicy
 matchExpressions:
-  # claims-bot may read and escalate, never touch PII
-  - 'jwt.sub == "claims-bot" && mcp.tool.name in ["get_claim","escalate_claim"]'
-  # only verified adjusters (claim from IdP) may pull PII
-  - 'jwt.claims["role"] == "claims-adjuster" && mcp.tool.name == "access_pii"'
+  # nba-agent may fetch profile and push recommendations, never financial history
+  - 'jwt.sub == "nba-agent" && mcp.tool.name in ["get_customer_profile","recommend_offer"]'
+  # only verified relationship managers (IdP claim) may read financial history
+  - 'jwt.claims["role"] == "relationship-manager" && mcp.tool.name == "access_financial_history"'
 denyByDefault: true""",
-    "underwriting_risk": """\
-# 02-underwriting-budget.yaml — AgentgatewayPolicy
+
+    "mortgage_fraud": """\
+# 02-fraud-budget.yaml — AgentgatewayPolicy
 budget:
   scope: per-team
-  team: underwriting
+  team: mortgage-risk
   maxTokensPerDay: 500000
-  onExceed: route-to-fallback   # forces claude-haiku instead of hard-failing
+  onExceed: route-to-fallback   # cheaper model, no hard failure
 modelPin:
-  requirePinnedVersion: true    # OSFI E-23 model-risk documentation""",
-    "advisor_assist": """\
+  requirePinnedVersion: true    # OSFI E-23 / SR 11-7 model-risk documentation
+audit:
+  logPrompt: true
+  logCompletion: true
+  retentionDays: 2555           # 7 years, matches lending record-retention norms""",
+
+    "wealth_advisor": """\
 # 03-advisor-redaction.yaml — AgentgatewayPolicy
 guardrails:
-  direction: response           # scan what comes back from the tool
+  direction: response           # scan tool responses before agent sees them
   rules:
+    - name: account-number-redaction
+      pattern: '\\b\\d{7,12}\\b'
+      action: redact
     - name: sin-redaction
       pattern: '\\b\\d{3}-\\d{3}-\\d{3}\\b'
       action: redact
-    - name: policy-number-redaction
-      pattern: '\\bPOL-\\d{8}\\b'
-      action: redact
     - name: banking-redaction
       pattern: '\\b\\d{3}-\\d{3}-\\d{7,12}\\b'
-      action: redact""",
+      action: redact
+# Tool scope: only read/search tools permitted
+authorization:
+  matchExpressions:
+    - 'mcp.tool.name in ["search_products","get_client_summary"]'
+  denyByDefault: true""",
+
+    "aml_monitoring": """\
+# 04-aml-scope.yaml — AgentgatewayPolicy
+authorization:
+  matchExpressions:
+    # monitor and flag only — account actions require human authorisation
+    - 'mcp.tool.name in ["get_transaction_history","flag_transaction"]'
+  denyByDefault: true   # freeze_account and any future tools blocked until reviewed
+audit:
+  logPrompt: true
+  logCompletion: true
+  retentionDays: 2555   # FINTRAC record-retention requirement""",
 }
 
 CONTROL_EXPLANATION = {
-    "claims_triage": (
+    "next_best_action": (
         "The gateway enforces a CEL-based RBAC rule on every MCP tool call. "
-        "`claims-bot` can read and escalate claims but is structurally blocked "
-        "from calling `access_pii` — the rule is evaluated in the data plane "
-        "before the request ever reaches the MCP server, so no application-layer "
-        "code change can bypass it. Only a JWT carrying the `claims-adjuster` role "
-        "(issued by the IdP) is permitted to pull PII."
+        "The `nba-agent` can fetch customer profiles and push offers, but is "
+        "structurally blocked from calling `access_financial_history` — the rule "
+        "is evaluated in the data plane before the request reaches the MCP server. "
+        "Only a JWT carrying the `relationship-manager` role (issued by the IdP) "
+        "may read full financial history, ensuring human accountability for every "
+        "sensitive data access."
     ),
-    "underwriting_risk": (
+    "mortgage_fraud": (
         "The gateway tracks daily token consumption per team. When the "
-        "`underwriting` team crosses 500 000 tokens it automatically re-routes "
+        "`mortgage-risk` team crosses 500 000 tokens it automatically re-routes "
         "subsequent calls to `claude-haiku-4-5` instead of hard-failing — "
         "preserving throughput while capping cost. Model pinning ensures every "
-        "underwriting decision cites an exact, auditable model version, satisfying "
-        "OSFI E-23 model-risk documentation requirements."
+        "fraud-scoring decision cites an exact, auditable model version, "
+        "satisfying OSFI E-23 and SR 11-7 model-risk documentation requirements. "
+        "Full prompt and completion logging with 7-year retention meets lending "
+        "record-retention norms."
     ),
-    "advisor_assist": (
-        "Every tool response from the knowledge base MCP is scanned by the gateway "
-        "before it enters the agent's context window. Regex rules redact SINs, "
-        "policy numbers, and banking identifiers in real time — the agent never "
-        "sees raw PII and therefore cannot surface it in a chat response. Tool "
-        "scope is also enforced: only `search_kb` and `get_product_summary` are "
-        "permitted; any other tool call is denied at the gateway."
+    "wealth_advisor": (
+        "Every tool response from the knowledge base is scanned by the gateway "
+        "before it enters the agent's context window. Regex rules redact account "
+        "numbers, SINs, and banking identifiers in real time — the agent never "
+        "sees raw PII and therefore cannot surface it in an advisor chat response. "
+        "Tool scope is also enforced: only `search_products` and `get_client_summary` "
+        "are permitted. Any tool added to the MCP server in future is blocked by "
+        "default until explicitly reviewed and approved in the policy."
+    ),
+    "aml_monitoring": (
+        "The AML monitor can observe and flag suspicious transactions, but the "
+        "`freeze_account` tool is explicitly out of scope. Any attempt by the agent "
+        "to freeze an account is denied at the gateway before it reaches the MCP "
+        "server — enforcing a human-in-the-loop requirement for all irreversible "
+        "financial actions. `denyByDefault: true` also ensures any new tools added "
+        "to the server are blocked until reviewed, preventing capability creep. "
+        "Full audit logging meets FINTRAC record-retention requirements."
     ),
 }
 
-RISK_COLORS = {"High": "#e53e3e", "Medium": "#dd6b20", "Low": "#38a169"}
+REASON_EXPLANATION = {
+    "role!=relationship-manager": (
+        "**Policy fired:** `01-nba-rbac.yaml`  \n"
+        "**Rule:** The caller (`nba-agent`) does not carry the `relationship-manager` "
+        "role in its JWT. The allow expression requires "
+        "`jwt.claims[\"role\"] == \"relationship-manager\"` to call `access_financial_history`.  \n"
+        "**To allow:** The request must originate from a human relationship manager "
+        "whose IdP-issued JWT carries the required role claim. The agent identity "
+        "cannot be elevated to this role — by design."
+    ),
+    "daily_token_budget_exceeded": (
+        "**Policy fired:** `02-fraud-budget.yaml`  \n"
+        "**Rule:** Team `mortgage-risk` has consumed ≥ 500 000 tokens today. "
+        "`onExceed: route-to-fallback` redirects to `claude-haiku-4-5` rather "
+        "than hard-failing, preserving throughput at lower cost.  \n"
+        "**To avoid fallback:** Raise `maxTokensPerDay` in the policy, reduce "
+        "prompt size, or distribute load across the day."
+    ),
+    "tool_not_in_scope": (
+        "**Policy fired:** `03-advisor-redaction.yaml` / `04-aml-scope.yaml`  \n"
+        "**Rule:** The requested tool is not in the allow list. "
+        "`denyByDefault: true` blocks any tool not explicitly permitted.  \n"
+        "**To allow:** Add the tool to `matchExpressions` in the relevant policy "
+        "after security review. This gate prevents capability creep — new MCP "
+        "tools are blocked until consciously approved."
+    ),
+}
+
+RISK_COLORS = {"Critical": "#742a2a", "High": "#e53e3e", "Medium": "#dd6b20", "Low": "#38a169"}
 DECISION_COLORS = {
-    "allow": "#38a169",
-    "deny": "#e53e3e",
+    "allow":            "#38a169",
+    "deny":             "#e53e3e",
     "route-to-fallback": "#dd6b20",
 }
 
@@ -147,25 +233,23 @@ def residual_risk(deny_rate: float, redaction_rate: float) -> str:
     return "High"
 
 
-def residual_risk_detail(deny_rate: float, redaction_rate: float, uc: str) -> str:
+def residual_risk_detail(deny_rate: float, redaction_rate: float) -> str:
     signal = max(deny_rate, redaction_rate)
     if signal == 0:
         return "No violations observed in this window — controls are passive."
     if signal < 0.15:
-        return f"Controls intercepted isolated attempts ({deny_rate:.0%} deny rate, {redaction_rate:.0%} redaction rate). Policy holding."
+        return f"Controls intercepted isolated attempts ({deny_rate:.0%} deny · {redaction_rate:.0%} redaction). Policy holding."
     if signal < 0.4:
-        return f"Recurring control hits ({deny_rate:.0%} deny rate, {redaction_rate:.0%} redaction rate). Review policy scope."
-    return f"Frequent control hits ({deny_rate:.0%} deny rate, {redaction_rate:.0%} redaction rate). Escalate for review."
+        return f"Recurring control hits ({deny_rate:.0%} deny · {redaction_rate:.0%} redaction). Review policy scope."
+    return f"Frequent control hits ({deny_rate:.0%} deny · {redaction_rate:.0%} redaction). Escalate for review."
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.image("https://agentgateway.dev/img/logo.svg", width=160) if False else None
     st.markdown("## 🛡️ AgentGateway")
     st.caption(
-        "Open-source LLM/MCP/A2A data plane · "
-        "[agentgateway.dev](https://agentgateway.dev) · "
-        "Linux Foundation / AAIF"
+        "Open-source LLM / MCP / A2A data plane  \n"
+        "[agentgateway.dev](https://agentgateway.dev) · Linux Foundation / AAIF"
     )
     st.divider()
 
@@ -173,7 +257,7 @@ with st.sidebar:
     uploaded = st.file_uploader(
         "Upload agentgateway-audit.jsonl",
         type=["jsonl", "json", "log"],
-        help="Export from ./logs/agentgateway-audit.jsonl after running the gateway locally.",
+        help="Drop in a real export from ./logs/agentgateway-audit.jsonl after running the gateway locally.",
     )
     if not uploaded:
         st.info("Showing synthetic sample data shaped like a real export.", icon="ℹ️")
@@ -184,6 +268,7 @@ with st.sidebar:
 df_raw = load_logs(uploaded) if uploaded is not None else load_logs(DEFAULT_LOG_PATH)
 
 with st.sidebar:
+    uc_reverse = {v: k for k, v in USE_CASE_LABELS.items()}
     uc_options = ["All"] + list(USE_CASE_LABELS.values())
     uc_filter = st.selectbox("Use case", uc_options)
 
@@ -198,7 +283,7 @@ with st.sidebar:
     date_range = st.date_input("Date range", value=(min_date, max_date), min_value=min_date, max_value=max_date)
 
     st.divider()
-    st.markdown("### Architecture")
+    st.markdown("### How it works")
     st.markdown(
         """
 ```
@@ -206,9 +291,9 @@ with st.sidebar:
         │
         ▼
   ┌─────────────┐
-  │agentgateway │  ◄── CEL policies
-  │  data plane │      budget caps
-  │             │      PII guardrails
+  │agentgateway │◄── CEL policies
+  │  data plane │    budget caps
+  │             │    PII guardrails
   └──────┬──────┘
          │
     ┌────┴────┐
@@ -216,13 +301,12 @@ with st.sidebar:
   MCP       LLM
  Server    Provider
 ```
+Every decision in this report was made at the **gateway layer** — before reaching any tool or model.
         """
     )
-    st.caption("Every decision in this report was made at the gateway layer — before reaching the tool or model.")
 
 # ── Apply filters ─────────────────────────────────────────────────────────────
 df = df_raw.copy()
-uc_reverse = {v: k for k, v in USE_CASE_LABELS.items()}
 if uc_filter != "All":
     df = df[df["use_case"] == uc_reverse[uc_filter]]
 if agent_filter != "All":
@@ -230,19 +314,21 @@ if agent_filter != "All":
 if decision_filter != "All":
     df = df[df["decision"] == decision_filter]
 if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-    df = df[(df["timestamp"].dt.date >= date_range[0]) & (df["timestamp"].dt.date <= date_range[1])]
+    df = df[
+        (df["timestamp"].dt.date >= date_range[0])
+        & (df["timestamp"].dt.date <= date_range[1])
+    ]
 
-# ── Section 0 — Header ────────────────────────────────────────────────────────
+# ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("# 🛡️ Agentic AI Governance Gateway")
 st.markdown(
-    "**Control plane for three RBC Insurance agent use cases** — "
-    "decisioning, monitoring, and audit evidence captured by "
-    "[agentgateway](https://agentgateway.dev) (open-source LLM/MCP/A2A data plane, Linux Foundation / AAIF). "
-    "Every allow, deny, fallback, and redaction below is a policy decision made in the gateway layer, "
-    "upstream of any tool or model."
+    "**Control plane for four banking AI agent use cases** — decisioning, monitoring, and audit evidence "
+    "captured by [agentgateway](https://agentgateway.dev) (open-source LLM/MCP/A2A data plane, "
+    "Linux Foundation / AAIF). Every allow, deny, fallback, and redaction below is a policy "
+    "decision made in the gateway layer, upstream of any tool or model."
 )
 
-# ── Section 1 — Executive KPI strip ──────────────────────────────────────────
+# ── KPI strip ─────────────────────────────────────────────────────────────────
 st.divider()
 total = len(df)
 denied = int((df["decision"] == "deny").sum())
@@ -251,23 +337,23 @@ redactions = int(df["redactions"].sum())
 avg_latency = df["latency_ms"].mean() if total > 0 else 0
 deny_pct = denied / total if total > 0 else 0
 
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Total gateway decisions", total)
-col2.metric("Denied", denied, delta=f"{deny_pct:.0%} deny rate", delta_color="inverse")
-col3.metric("Routed to fallback", fallback, help="Budget exceeded → cheaper model, no hard failure")
-col4.metric("PII redactions applied", redactions, help="Fields stripped in real time before reaching agent context")
-col5.metric("Avg latency (ms)", f"{avg_latency:.0f}", help="End-to-end gateway decision latency")
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Total gateway decisions", total)
+c2.metric("Denied", denied, delta=f"{deny_pct:.0%} deny rate", delta_color="inverse")
+c3.metric("Routed to fallback", fallback, help="Budget exceeded → cheaper model, no hard failure")
+c4.metric("PII redactions applied", redactions, help="Fields stripped before agent context window")
+c5.metric("Avg latency (ms)", f"{avg_latency:.0f}", help="End-to-end gateway decision latency")
 
-# ── Section 2 — Risk scorecard ────────────────────────────────────────────────
+# ── Governance scorecard ──────────────────────────────────────────────────────
 st.divider()
-st.markdown("## Governance scorecard by use case")
+st.markdown("## Governance scorecard")
 st.caption(
     "Inherent risk is the pre-control judgment from policy design. "
     "Residual risk is computed live from what the gateway actually observed in this window."
 )
 
 for uc, label in USE_CASE_LABELS.items():
-    sub = df_raw[df_raw["use_case"] == uc]  # always use full dataset for scorecard
+    sub = df_raw[df_raw["use_case"] == uc]
     if sub.empty:
         continue
 
@@ -275,47 +361,50 @@ for uc, label in USE_CASE_LABELS.items():
     redaction_rate = (sub["redactions"] > 0).mean()
     res_risk = residual_risk(deny_rate, redaction_rate)
     inh_risk = INHERENT_RISK[uc]
-    inh_color = RISK_COLORS[inh_risk]
-    res_color = RISK_COLORS[res_risk]
+    inh_color = RISK_COLORS.get(inh_risk, "#718096")
+    res_color = RISK_COLORS.get(res_risk, "#718096")
+    icon = USE_CASE_ICONS[uc]
 
     with st.container(border=True):
-        h_col, badge_col = st.columns([6, 1])
-        h_col.markdown(f"### {label}")
+        h_col, badge_col = st.columns([7, 1])
+        h_col.markdown(f"### {icon} {label}")
         badge_col.markdown(
-            f'<span style="background:{res_color};color:white;padding:4px 10px;border-radius:12px;font-size:0.8rem;font-weight:600">'
-            f'Residual: {res_risk}</span>',
+            f'<div style="text-align:right">'
+            f'<span style="background:{res_color};color:white;padding:4px 12px;'
+            f'border-radius:12px;font-size:0.8rem;font-weight:600">Residual: {res_risk}</span>'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
-        r1c1, r1c2, r1c3, r1c4 = st.columns([2, 2, 2, 1])
-        r1c1.markdown(f"**Control pattern**  \n{GOVERNANCE_PATTERN[uc]}")
-        r1c2.markdown(
+        r1, r2, r3, r4 = st.columns([2, 2, 2, 1])
+        r1.markdown(f"**Control pattern**  \n{GOVERNANCE_PATTERN[uc]}")
+        r2.markdown(
             f"**Inherent risk**  \n"
-            f'<span style="color:{inh_color};font-weight:600">{inh_risk}</span> — {INHERENT_RISK_DETAIL[uc]}',
+            f'<span style="color:{inh_color};font-weight:600">{inh_risk}</span>  \n'
+            f"{INHERENT_RISK_DETAIL[uc]}",
             unsafe_allow_html=True,
         )
-        r1c3.markdown(
+        r3.markdown(
             f"**Residual risk**  \n"
-            f'<span style="color:{res_color};font-weight:600">{res_risk}</span> — {residual_risk_detail(deny_rate, redaction_rate, uc)}',
+            f'<span style="color:{res_color};font-weight:600">{res_risk}</span>  \n'
+            f"{residual_risk_detail(deny_rate, redaction_rate)}",
             unsafe_allow_html=True,
         )
-        r1c4.metric("Calls (all time)", len(sub))
+        r4.metric("Calls", len(sub))
 
-        with st.expander("Policy details & explainability"):
-            exp_col1, exp_col2 = st.columns([1, 1])
-            with exp_col1:
-                st.markdown("**Active policy (agentgateway YAML)**")
+        with st.expander("Policy & explainability"):
+            pc1, pc2 = st.columns([1, 1])
+            with pc1:
+                st.markdown("**Active agentgateway policy**")
                 st.code(POLICY_SNIPPET[uc], language="yaml")
-            with exp_col2:
+            with pc2:
                 st.markdown("**How this control works**")
                 st.markdown(CONTROL_EXPLANATION[uc])
-
-                # Mini metrics
                 m1, m2 = st.columns(2)
                 m1.metric("Deny rate", f"{deny_rate:.0%}")
                 m2.metric("Redaction rate", f"{redaction_rate:.0%}")
 
-# ── Section 3 — Decisions over time ──────────────────────────────────────────
+# ── Decisions over time ───────────────────────────────────────────────────────
 st.divider()
 st.markdown("## Decisions over time")
 
@@ -326,34 +415,25 @@ time_df = (
     .reset_index(name="count")
 )
 time_df.columns = ["timestamp", "decision", "count"]
-time_df["color"] = time_df["decision"].map(DECISION_COLORS)
 
 fig_time = px.bar(
-    time_df,
-    x="timestamp",
-    y="count",
-    color="decision",
+    time_df, x="timestamp", y="count", color="decision",
     color_discrete_map=DECISION_COLORS,
-    labels={"count": "Decisions", "timestamp": "Time", "decision": "Decision"},
+    labels={"count": "Decisions", "timestamp": "", "decision": "Decision"},
     barmode="stack",
 )
 fig_time.update_layout(
-    plot_bgcolor="rgba(0,0,0,0)",
-    paper_bgcolor="rgba(0,0,0,0)",
-    legend_title_text="Decision",
-    margin=dict(l=0, r=0, t=10, b=0),
-    height=280,
+    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+    legend_title_text="Decision", margin=dict(l=0, r=0, t=10, b=0), height=280,
 )
-st.plotly_chart(fig_time, use_container_width=True)
+st.plotly_chart(fig_time, use_container_width=True, key="main_timeline")
 
-# ── Section 4 — Agent activity monitor ───────────────────────────────────────
+# ── Agent activity monitor ────────────────────────────────────────────────────
 st.divider()
 st.markdown("## Agent activity monitor")
 st.caption("Per-agent call volume, control hit rates, token burn, and latency distribution.")
 
-agents = df["agent_id"].unique().tolist()
-
-for agent in sorted(agents):
+for agent in sorted(df["agent_id"].unique()):
     asub = df[df["agent_id"] == agent]
     a_deny_rate = (asub["decision"] == "deny").mean()
     a_tokens = int(asub["tokens_used"].sum())
@@ -362,17 +442,16 @@ for agent in sorted(agents):
     a_calls = len(asub)
     a_uc = asub["use_case"].iloc[0] if not asub.empty else ""
     a_label = USE_CASE_LABELS.get(a_uc, a_uc)
+    status = "🔴" if a_deny_rate > 0.3 else ("🟡" if a_deny_rate > 0.1 else "🟢")
 
-    with st.expander(f"{'🔴' if a_deny_rate > 0.3 else ('🟡' if a_deny_rate > 0.1 else '🟢')} **{agent}** · {a_label} · {a_calls} calls", expanded=False):
+    with st.expander(f"{status} **{agent}** · {a_label} · {a_calls} calls"):
         mc1, mc2, mc3, mc4, mc5 = st.columns(5)
         mc1.metric("Total calls", a_calls)
-        mc2.metric("Deny rate", f"{a_deny_rate:.0%}", delta_color="inverse",
-                   delta=f"{int(a_deny_rate * a_calls)} denied")
+        mc2.metric("Deny rate", f"{a_deny_rate:.0%}", delta=f"{int(a_deny_rate * a_calls)} denied", delta_color="inverse")
         mc3.metric("Tokens used", f"{a_tokens:,}")
-        mc4.metric("p50 latency (ms)", f"{a_p50:.0f}")
-        mc5.metric("p95 latency (ms)", f"{a_p95:.0f}")
+        mc4.metric("p50 latency ms", f"{a_p50:.0f}")
+        mc5.metric("p95 latency ms", f"{a_p95:.0f}")
 
-        # Timeline for this agent
         agent_time = (
             asub.set_index("timestamp")
             .groupby([pd.Grouper(freq="2h"), "decision"])
@@ -381,76 +460,48 @@ for agent in sorted(agents):
         )
         agent_time.columns = ["timestamp", "decision", "count"]
         if not agent_time.empty:
-            fig_agent = px.bar(
+            fig_a = px.bar(
                 agent_time, x="timestamp", y="count", color="decision",
                 color_discrete_map=DECISION_COLORS, barmode="stack",
-                height=160, labels={"count": "", "timestamp": ""},
+                height=150, labels={"count": "", "timestamp": ""},
             )
-            fig_agent.update_layout(
+            fig_a.update_layout(
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 showlegend=False, margin=dict(l=0, r=0, t=4, b=0),
             )
-            st.plotly_chart(fig_agent, use_container_width=True, key=f"timeline_{agent}")
+            st.plotly_chart(fig_a, use_container_width=True, key=f"timeline_{agent}")
 
-        # Tool breakdown
         tool_counts = asub.groupby(["tool", "decision"]).size().reset_index(name="count")
         if not tool_counts.empty:
-            fig_tools = px.bar(
+            fig_t = px.bar(
                 tool_counts, x="tool", y="count", color="decision",
                 color_discrete_map=DECISION_COLORS, barmode="stack",
                 height=180, labels={"count": "Calls", "tool": "Tool / Model"},
             )
-            fig_tools.update_layout(
+            fig_t.update_layout(
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 showlegend=False, margin=dict(l=0, r=0, t=4, b=0),
             )
-            st.plotly_chart(fig_tools, use_container_width=True, key=f"tools_{agent}")
+            st.plotly_chart(fig_t, use_container_width=True, key=f"tools_{agent}")
 
-# ── Section 5 — Decision explorer ─────────────────────────────────────────────
+# ── Decision explorer ─────────────────────────────────────────────────────────
 st.divider()
 st.markdown("## Decision explorer")
 st.caption(
     "Every gateway decision in the filtered window. "
-    "Expand any denied or fallback row to see the policy that fired and what would change the outcome."
+    "Expand any denied or fallback row to see which policy fired and why."
 )
 
-REASON_EXPLANATION = {
-    "role!=claims-adjuster": (
-        "**Policy fired:** `claims-pii-rbac` (01-claims-rbac.yaml)  \n"
-        "**Rule:** `jwt.sub == \"claims-bot\"` does not satisfy the PII allow expression, "
-        "which requires `jwt.claims[\"role\"] == \"claims-adjuster\"`.  \n"
-        "**To allow:** The caller must present a JWT with `role=claims-adjuster` issued by the IdP. "
-        "The agent identity (`claims-bot`) cannot be granted this — by design."
-    ),
-    "daily_token_budget_exceeded": (
-        "**Policy fired:** `underwriting-token-budget` (02-underwriting-budget.yaml)  \n"
-        "**Rule:** Team `underwriting` has consumed ≥ 500 000 tokens today. "
-        "`onExceed: route-to-fallback` redirects to `claude-haiku-4-5` instead of hard-failing.  \n"
-        "**To avoid fallback:** Either raise `maxTokensPerDay` in the policy, or reduce prompt size / call frequency."
-    ),
-    "tool_not_in_scope": (
-        "**Policy fired:** `advisor-tool-scope` (03-advisor-redaction.yaml)  \n"
-        "**Rule:** Only `search_kb` and `get_product_summary` are in the allow list. "
-        "`delete_client_record` is not — and `denyByDefault: true` blocks it.  \n"
-        "**To allow:** Explicitly add the tool to `matchExpressions` in the policy. "
-        "This is intentional: any new tool added to the MCP server is blocked until reviewed."
-    ),
-}
+pill1, pill2, pill3 = st.columns(3)
+show_allow    = pill1.checkbox("✅ Allow",    value=True)
+show_deny     = pill2.checkbox("🚫 Deny",     value=True)
+show_fallback = pill3.checkbox("⚠️ Fallback", value=True)
 
-# Decision filter pills
-pill_col1, pill_col2, pill_col3, pill_col4 = st.columns(4)
-show_allow = pill_col1.checkbox("✅ Allow", value=True)
-show_deny = pill_col2.checkbox("🚫 Deny", value=True)
-show_fallback = pill_col3.checkbox("⚠️ Fallback", value=True)
-
-decisions_to_show = []
-if show_allow:
-    decisions_to_show.append("allow")
-if show_deny:
-    decisions_to_show.append("deny")
-if show_fallback:
-    decisions_to_show.append("route-to-fallback")
-
+decisions_to_show = (
+    (["allow"] if show_allow else [])
+    + (["deny"] if show_deny else [])
+    + (["route-to-fallback"] if show_fallback else [])
+)
 explorer_df = df[df["decision"].isin(decisions_to_show)].sort_values("timestamp", ascending=False)
 
 show_cols = [c for c in [
@@ -458,40 +509,38 @@ show_cols = [c for c in [
     "decision", "reason", "redactions", "tokens_used", "latency_ms",
 ] if c in explorer_df.columns]
 
-# Colour-code the decision column
+
 def style_decision(val):
-    colors = {"allow": "#c6f6d5", "deny": "#fed7d7", "route-to-fallback": "#feebc8"}
-    bg = colors.get(val, "")
+    bg = {"allow": "#c6f6d5", "deny": "#fed7d7", "route-to-fallback": "#feebc8"}.get(val, "")
     return f"background-color: {bg}"
 
-styled = explorer_df[show_cols].style.applymap(style_decision, subset=["decision"])
-st.dataframe(styled, use_container_width=True, hide_index=True)
 
-# Expandable explainability for non-allow events
+st.dataframe(
+    explorer_df[show_cols].style.applymap(style_decision, subset=["decision"]),
+    use_container_width=True,
+    hide_index=True,
+)
+
 non_allow = explorer_df[explorer_df["decision"] != "allow"]
 if not non_allow.empty:
     st.markdown("### Why these decisions were made")
     for _, row in non_allow.iterrows():
-        reason = row.get("reason", "")
+        reason = str(row.get("reason", ""))
         explanation = REASON_EXPLANATION.get(reason)
         icon = "🚫" if row["decision"] == "deny" else "⚠️"
         label = (
-            f"{icon} **{row['decision'].upper()}** · {row['agent_id']} → `{row['tool']}` "
-            f"· {row['timestamp'].strftime('%b %d %H:%M')}"
+            f"{icon} **{row['decision'].upper()}** · {row['agent_id']} → "
+            f"`{row['tool']}` · {row['timestamp'].strftime('%b %d %H:%M')}"
         )
-        if explanation:
-            with st.expander(label):
+        with st.expander(label):
+            if explanation:
                 st.markdown(explanation)
-                st.caption(f"Raw reason field: `{reason}`")
-        else:
-            with st.expander(label):
-                st.markdown(f"Reason: `{reason or 'not specified'}`")
+            st.caption(f"Raw reason field: `{reason or 'not specified'}`")
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.divider()
 st.caption(
     "Built on [agentgateway](https://agentgateway.dev) · "
-    "Open source (Linux Foundation / AAIF) · "
-    "Governance report for RBC Insurance agentic AI use cases · "
-    "Designed to slot into the AI & ML Governance Command Centre."
+    "Open source · Linux Foundation / AAIF · "
+    "Agentic AI governance for financial services use cases."
 )
