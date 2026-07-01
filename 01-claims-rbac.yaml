@@ -1,0 +1,47 @@
+# Use case 1: Claims Triage Agent
+# Governance pattern: tool-level RBAC (access control decisioning)
+#
+# Risk being controlled: a claims-bot agent should be able to read and
+# escalate claims, but only a human-supervised "claims-adjuster" identity
+# should be able to call the access_pii tool (claimant SIN, banking info).
+#
+# Inherent risk: High  (PII exposure via an autonomous agent)
+# Residual risk after this control: Low (PII tool gated to verified human-linked JWT)
+
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: claims-pii-rbac
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: claims-mcp-backend
+  backend:
+    mcp:
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions:
+            # claims-bot may read and escalate, never touch PII
+            - 'jwt.sub == "claims-bot" && mcp.tool.name in ["get_claim", "escalate_claim"]'
+            # only verified adjusters (claim from IdP) may pull PII
+            - 'jwt.claims["role"] == "claims-adjuster" && mcp.tool.name == "access_pii"'
+      denyByDefault: true
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: claims-rate-limit
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: claims-mcp-backend
+  backend:
+    mcp:
+      rateLimit:
+        requestsPerMinute: 60
+        scope: per-agent-identity

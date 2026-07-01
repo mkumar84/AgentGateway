@@ -1,0 +1,57 @@
+# Use case 3: Advisor Assist Agent
+# Governance pattern: content guardrail / PII redaction decisioning
+#
+# Risk being controlled: an advisor-facing agent pulling from a knowledge
+# base MCP server could surface a client's SIN, policy number, or banking
+# detail in a chat response meant only for general guidance.
+#
+# Inherent risk: High  (PII leakage into an advisor-facing chat surface)
+# Residual risk after this control: Low (regex + pattern-based redaction
+#   on every tool response before it reaches the agent's context window)
+
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: advisor-pii-redaction
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: advisor-kb-mcp-backend
+  backend:
+    mcp:
+      guardrails:
+        direction: response          # scan what comes back from the tool
+        rules:
+          - name: sin-redaction
+            pattern: '\b\d{3}-\d{3}-\d{3}\b'
+            action: redact
+            replaceWith: "[REDACTED-SIN]"
+          - name: policy-number-redaction
+            pattern: '\bPOL-\d{8}\b'
+            action: redact
+            replaceWith: "[REDACTED-POLICY-NUM]"
+          - name: banking-redaction
+            pattern: '\b\d{3}-\d{3}-\d{7,12}\b'
+            action: redact
+            replaceWith: "[REDACTED-BANKING]"
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: advisor-tool-scope
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: advisor-kb-mcp-backend
+  backend:
+    mcp:
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions:
+            - 'jwt.sub == "advisor-assist-agent" && mcp.tool.name in ["search_kb", "get_product_summary"]'
+        denyByDefault: true   # blocks any tool added later until explicitly scoped

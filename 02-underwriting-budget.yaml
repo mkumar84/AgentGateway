@@ -1,0 +1,48 @@
+# Use case 2: Underwriting Risk-Scoring Agent
+# Governance pattern: cost / budget decisioning + model-routing control
+#
+# Risk being controlled: recursive risk-scoring loops over uncapped LLM
+# spend, and inconsistent model use across teams for a regulated decision
+# (underwriting outcomes need explainability + a known model version).
+#
+# Inherent risk: Medium  (cost runaway, model drift on a regulated decision)
+# Residual risk after this control: Low (hard budget cap + pinned fallback model)
+
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: underwriting-token-budget
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: underwriting-llm-pool
+  backend:
+    llm:
+      budget:
+        scope: per-team
+        team: underwriting
+        maxTokensPerDay: 500000
+        onExceed: route-to-fallback   # forces claude-haiku-4-5 instead of hard-failing
+      modelPin:
+        # underwriting decisions must cite the exact model version used,
+        # for explainability / OSFI E-23 model-risk documentation
+        requirePinnedVersion: true
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: underwriting-audit
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+    - group: agentgateway.dev
+      kind: AgentgatewayBackend
+      name: underwriting-llm-pool
+  backend:
+    llm:
+      audit:
+        logPrompt: true
+        logCompletion: true
+        retentionDays: 2555   # 7 years, matches insurance record-retention norms

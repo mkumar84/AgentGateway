@@ -1,0 +1,65 @@
+# agentgateway standalone config
+# Three RBC Insurance use cases routed through one data plane:
+#   1. Claims Triage Agent      -> claims-mcp (tool-level RBAC)
+#   2. Underwriting Risk Agent  -> LLM gateway (cost/budget governance)
+#   3. Advisor Assist Agent     -> advisor-kb-mcp (PII redaction guardrail)
+#
+# Run with: agentgateway -f config/config.yaml
+# UI will be live at http://localhost:15000/ui
+
+binds:
+  - port: 3000
+    listeners:
+      - routes:
+          # ---------------- Use case 1: Claims Triage ----------------
+          - matches:
+              - path:
+                  pathPrefix: /mcp-claims
+            backends:
+              - mcp:
+                  name: claims-mcp-backend
+                  targets:
+                    - name: claims-mcp
+                      stdio:
+                        cmd: "node"
+                        args: ["./mock-servers/claims-mcp.js"]
+
+          # ---------------- Use case 2: Underwriting Risk Scoring ----------------
+          - matches:
+              - path:
+                  pathPrefix: /llm-underwriting
+            backends:
+              - llm:
+                  name: underwriting-llm-pool
+                  providers:
+                    - name: claude-primary
+                      provider: anthropic
+                      model: claude-sonnet-4-6
+                    - name: claude-fallback
+                      provider: anthropic
+                      model: claude-haiku-4-5
+                  routing:
+                    strategy: cost-aware   # fall back to cheaper model when team budget threshold is near
+
+          # ---------------- Use case 3: Advisor Assist ----------------
+          - matches:
+              - path:
+                  pathPrefix: /mcp-advisor
+            backends:
+              - mcp:
+                  name: advisor-kb-mcp-backend
+                  targets:
+                    - name: advisor-kb-mcp
+                      stdio:
+                        cmd: "node"
+                        args: ["./mock-servers/advisor-kb-mcp.js"]
+
+# Observability — OTEL on by default, exported for the Command Centre to ingest
+telemetry:
+  otel:
+    enabled: true
+    exporter: otlp
+    endpoint: "http://localhost:4317"
+  accessLog:
+    format: json
+    path: "./logs/agentgateway-audit.jsonl"   # this is what report.py reads
