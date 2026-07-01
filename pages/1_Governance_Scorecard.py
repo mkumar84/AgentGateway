@@ -16,9 +16,12 @@ from utils import (
     RISK_COLORS,
     USE_CASE_ICONS,
     USE_CASE_LABELS,
+    USE_CASE_OWNERS,
+    governance_score,
     render_sidebar,
     residual_detail,
     residual_risk,
+    score_color,
 )
 
 df_raw, df, _ = render_sidebar()
@@ -42,22 +45,37 @@ for sector_label, uc_group in [
     st.markdown(f"## {sector_label}")
 
     for uc in sector_ucs:
-        label = USE_CASE_LABELS[uc]
-        icon  = USE_CASE_ICONS[uc]
-        sub   = df_raw[df_raw["use_case"] == uc]
+        label  = USE_CASE_LABELS[uc]
+        icon   = USE_CASE_ICONS[uc]
+        owner  = USE_CASE_OWNERS.get(uc, "")
+        sub    = df_raw[df_raw["use_case"] == uc]
 
         deny_rate      = (sub["decision"] == "deny").mean()
         redaction_rate = (sub["redactions"] > 0).mean()
+        avg_lat        = sub["latency_ms"].mean() if len(sub) else 0
         res            = residual_risk(deny_rate, redaction_rate)
         inh            = INHERENT_RISK[uc]
         inh_color      = RISK_COLORS.get(inh, "#718096")
         res_color      = RISK_COLORS.get(res, "#718096")
+        score          = governance_score(1 - deny_rate, redaction_rate, avg_lat)
+        sc             = score_color(score)
 
         with st.container(border=True):
-            h_col, badge_col = st.columns([7, 1])
-            h_col.markdown(f"#### {icon} {label}")
+            h_col, score_col, badge_col = st.columns([5, 1, 2])
+            h_col.markdown(
+                f"#### {icon} {label}  \n"
+                f'<span style="color:#718096;font-size:0.78rem">{owner}</span>',
+                unsafe_allow_html=True,
+            )
+            score_col.markdown(
+                f'<div style="text-align:center;margin-top:4px">'
+                f'<div style="font-size:1.8rem;font-weight:700;color:{sc};line-height:1">{score}</div>'
+                f'<div style="font-size:0.7rem;color:#718096">gov score</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
             badge_col.markdown(
-                f'<div style="text-align:right;margin-top:6px">'
+                f'<div style="text-align:right;margin-top:10px">'
                 f'<span style="background:{res_color};color:white;padding:3px 12px;'
                 f'border-radius:10px;font-size:0.78rem;font-weight:600">'
                 f'Residual: {res}</span></div>',

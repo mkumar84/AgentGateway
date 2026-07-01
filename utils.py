@@ -10,6 +10,16 @@ import streamlit as st
 
 DEFAULT_LOG_PATH = Path(__file__).parent / "sample_logs" / "audit-sample.jsonl"
 
+# ── Cost model ───────────────────────────────────────────────────────────────
+# Approximate cost per 1k tokens (input+output blended) per model
+MODEL_COST_PER_1K = {
+    "claude-sonnet-4-6": 0.003,    # ~$3 / 1M tokens
+    "claude-haiku-4-5":  0.00025,  # ~$0.25 / 1M tokens
+}
+DAILY_BUDGET_USD = 10.00  # configurable daily spend cap
+
+HUMAN_ROLES = {"relationship-manager", "claims-adjuster"}
+
 # ── Use cases ─────────────────────────────────────────────────────────────────
 BANKING_USE_CASES = {
     "next_best_action": "Next Best Action Agent",
@@ -44,6 +54,16 @@ USE_CASE_SECTOR = {
     "claims_triage":     "Insurance",
     "underwriting_risk": "Insurance",
     "advisor_assist":    "Insurance",
+}
+
+USE_CASE_OWNERS = {
+    "next_best_action":  "Retail Banking · Digital Team",
+    "mortgage_fraud":    "Mortgage Risk · Credit Risk Team",
+    "wealth_advisor":    "Wealth Management · Advisory Team",
+    "aml_monitoring":    "Financial Crime · Compliance Team",
+    "claims_triage":     "Claims Operations · P&C Team",
+    "underwriting_risk": "Underwriting · Actuarial Team",
+    "advisor_assist":    "Financial Advisory · Client Services",
 }
 
 INHERENT_RISK = {
@@ -248,6 +268,39 @@ DECISION_ICONS = {
     "deny":              "🚫",
     "route-to-fallback": "⚠️",
 }
+
+
+# ── Cost & governance helpers ─────────────────────────────────────────────────
+def compute_costs(df: "pd.DataFrame"):
+    """Return (total_spend_usd, savings_usd_via_fallback)."""
+    spend = 0.0
+    savings = 0.0
+    sonnet_rate = MODEL_COST_PER_1K.get("claude-sonnet-4-6", 0.003)
+    for _, row in df.iterrows():
+        tool   = row.get("tool", "")
+        tokens = int(row.get("tokens_used", 0))
+        rate   = MODEL_COST_PER_1K.get(tool, 0.0)
+        spend += tokens * rate / 1000
+        if tool == "claude-haiku-4-5" and tokens > 0:
+            savings += tokens * (sonnet_rate - rate) / 1000
+    return round(spend, 4), round(savings, 4)
+
+
+def governance_score(compliance_rate: float, redaction_rate: float, avg_latency_ms: float) -> int:
+    """
+    0-100 score per use case.
+    compliance 50% + PII control 30% + latency SLA 20%.
+    Latency SLA: 50ms = perfect for MCP; LLM tools scale to 2000ms ceiling.
+    """
+    latency_score = max(0.0, 1.0 - max(0.0, avg_latency_ms - 50) / 1950)
+    raw = compliance_rate * 0.5 + (1 - min(redaction_rate, 1)) * 0.3 + latency_score * 0.2
+    return round(min(100, max(0, raw * 100)))
+
+
+def score_color(score: int) -> str:
+    if score >= 85: return "#38a169"
+    if score >= 65: return "#dd6b20"
+    return "#e53e3e"
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
