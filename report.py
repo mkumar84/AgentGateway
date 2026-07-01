@@ -1,131 +1,28 @@
 """
-Page 1 — Overview
-Executive KPI strip and decisions-over-time chart.
+Entry point — defines navigation and routes to page files.
+Run:  streamlit run report.py
 """
 
-import plotly.express as px
 import streamlit as st
 
-from utils import DECISION_COLORS, USE_CASE_ICONS, USE_CASE_LABELS, render_sidebar
-
 st.set_page_config(
-    page_title="AgentGateway · Overview",
+    page_title="Agentic AI Governance Gateway",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-df_raw, df, _ = render_sidebar()
-
-# ── Header ────────────────────────────────────────────────────────────────────
-st.markdown("# 🛡️ Agentic AI Governance Gateway")
-st.markdown(
-    "**Control plane for banking and financial-services AI agent use cases** — "
-    "decisioning, monitoring, and audit evidence captured by "
-    "[agentgateway](https://agentgateway.dev) (open-source LLM/MCP/A2A data plane, "
-    "Linux Foundation / AAIF). Every allow, deny, fallback, and redaction is a policy "
-    "decision made in the gateway layer, upstream of any tool or model."
+pg = st.navigation(
+    {
+        "": [
+            st.Page("pages/0_Overview.py",              title="Overview",             icon="🛡️", default=True),
+        ],
+        "Analysis": [
+            st.Page("pages/1_Governance_Scorecard.py",  title="Governance Scorecard", icon="📊"),
+            st.Page("pages/2_Agent_Monitor.py",         title="Agent Monitor",        icon="🤖"),
+            st.Page("pages/3_Decision_Log.py",          title="Decision Log",         icon="📜"),
+        ],
+    }
 )
 
-# ── KPI strip ─────────────────────────────────────────────────────────────────
-st.divider()
-total      = len(df)
-denied     = int((df["decision"] == "deny").sum())
-fallback   = int((df["decision"] == "route-to-fallback").sum())
-redactions = int(df["redactions"].sum())
-avg_lat    = df["latency_ms"].mean() if total else 0
-deny_pct   = denied / total if total else 0
-
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Total gateway decisions", total)
-c2.metric("Denied", denied,
-          delta=f"{deny_pct:.0%} deny rate", delta_color="inverse")
-c3.metric("Routed to fallback", fallback,
-          help="Budget exceeded → cheaper model, no hard failure")
-c4.metric("PII redactions applied", redactions,
-          help="Stripped from tool responses before agent context window")
-c5.metric("Avg latency (ms)", f"{avg_lat:.0f}")
-
-# ── Use-case summary strip ────────────────────────────────────────────────────
-st.divider()
-st.markdown("### Active use cases")
-uc_counts = df["use_case"].value_counts()
-cols = st.columns(len(uc_counts)) if len(uc_counts) <= 7 else st.columns(4)
-for i, (uc, count) in enumerate(uc_counts.items()):
-    icon  = USE_CASE_ICONS.get(uc, "🤖")
-    label = USE_CASE_LABELS.get(uc, uc)
-    col   = cols[i % len(cols)]
-    col.metric(f"{icon} {label}", count, help="Gateway decisions in selected window")
-
-# ── Decisions over time ───────────────────────────────────────────────────────
-st.divider()
-st.markdown("### Decisions over time")
-st.caption("All gateway decisions in the selected window, bucketed by 3-hour intervals.")
-
-time_df = (
-    df.set_index("timestamp")
-    .groupby([__import__("pandas").Grouper(freq="3h"), "decision"])
-    .size()
-    .reset_index(name="count")
-)
-time_df.columns = ["timestamp", "decision", "count"]
-
-fig = px.bar(
-    time_df, x="timestamp", y="count", color="decision",
-    color_discrete_map=DECISION_COLORS, barmode="stack",
-    labels={"count": "Decisions", "timestamp": "", "decision": "Decision"},
-)
-fig.update_layout(
-    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-    legend_title_text="Decision", margin=dict(l=0, r=0, t=10, b=0), height=320,
-)
-st.plotly_chart(fig, use_container_width=True)
-
-# ── Decision mix donut ────────────────────────────────────────────────────────
-st.divider()
-st.markdown("### Decision breakdown")
-dc1, dc2 = st.columns([1, 2])
-
-with dc1:
-    mix = df["decision"].value_counts().reset_index()
-    mix.columns = ["decision", "count"]
-    fig_d = px.pie(
-        mix, names="decision", values="count",
-        color="decision", color_discrete_map=DECISION_COLORS,
-        hole=0.55,
-    )
-    fig_d.update_traces(textinfo="percent+label")
-    fig_d.update_layout(
-        showlegend=False, margin=dict(l=0, r=0, t=10, b=0), height=260,
-        paper_bgcolor="rgba(0,0,0,0)",
-    )
-    st.plotly_chart(fig_d, use_container_width=True)
-
-with dc2:
-    uc_dec = (
-        df.groupby(["use_case", "decision"])
-        .size()
-        .reset_index(name="count")
-    )
-    uc_dec["label"] = uc_dec["use_case"].map(
-        lambda x: f"{USE_CASE_ICONS.get(x,'🤖')} {USE_CASE_LABELS.get(x, x)}"
-    )
-    fig_uc = px.bar(
-        uc_dec, x="count", y="label", color="decision",
-        color_discrete_map=DECISION_COLORS, barmode="stack", orientation="h",
-        labels={"count": "Decisions", "label": "", "decision": "Decision"},
-    )
-    fig_uc.update_layout(
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        showlegend=True, margin=dict(l=0, r=0, t=10, b=0), height=260,
-        yaxis={"categoryorder": "total ascending"},
-    )
-    st.plotly_chart(fig_uc, use_container_width=True)
-
-# ── Footer ────────────────────────────────────────────────────────────────────
-st.divider()
-st.caption(
-    "Built on [agentgateway](https://agentgateway.dev) · "
-    "Open source · Linux Foundation / AAIF · "
-    "Agentic AI governance for financial services."
-)
+pg.run()

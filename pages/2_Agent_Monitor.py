@@ -9,13 +9,6 @@ import streamlit as st
 
 from utils import DECISION_COLORS, USE_CASE_ICONS, USE_CASE_LABELS, render_sidebar
 
-st.set_page_config(
-    page_title="AgentGateway · Agent Monitor",
-    page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
 df_raw, df, _ = render_sidebar()
 
 st.markdown("# 🤖 Agent Monitor")

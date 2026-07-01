@@ -21,13 +21,6 @@ from utils import (
     residual_risk,
 )
 
-st.set_page_config(
-    page_title="AgentGateway · Governance Scorecard",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
 df_raw, df, _ = render_sidebar()
 
 st.markdown("# 📊 Governance Scorecard")
