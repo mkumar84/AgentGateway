@@ -113,8 +113,8 @@ def color_deny(val):
 st.dataframe(
     display_cols.sort_values("Total calls", ascending=False)
     .style
-    .applymap(color_compliance, subset=["Compliance rate"])
-    .applymap(color_deny,       subset=["Deny rate"]),
+    .map(color_compliance, subset=["Compliance rate"])
+    .map(color_deny,       subset=["Deny rate"]),
     use_container_width=True,
     hide_index=True,
 )
