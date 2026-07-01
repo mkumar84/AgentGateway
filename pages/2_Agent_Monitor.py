@@ -87,6 +87,12 @@ for agent in agents:
                     margin=dict(l=0, r=0, t=4, b=0),
                 )
                 st.plotly_chart(fig_t, use_container_width=True, key=f"tools_{agent}")
+                st.page_link(
+                    f"pages/3_Tool_Performance.py",
+                    label="→ Full tool analysis for this agent",
+                    icon="🔧",
+                    help=f"Opens Tool Performance pre-filtered to {agent}",
+                )
             else:
                 st.caption("No tool data in selected window.")
 

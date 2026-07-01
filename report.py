@@ -20,7 +20,8 @@ pg = st.navigation(
         "Analysis": [
             st.Page("pages/1_Governance_Scorecard.py",  title="Governance Scorecard", icon="📊"),
             st.Page("pages/2_Agent_Monitor.py",         title="Agent Monitor",        icon="🤖"),
-            st.Page("pages/3_Decision_Log.py",          title="Decision Log",         icon="📜"),
+            st.Page("pages/3_Tool_Performance.py",      title="Tool Performance",     icon="🔧"),
+            st.Page("pages/4_Decision_Log.py",          title="Decision Log",         icon="📜"),
         ],
     }
 )
